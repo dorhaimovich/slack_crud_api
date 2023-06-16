@@ -4,8 +4,8 @@ const AWS = require('aws-sdk');
 // Verification
 const crypto = require('crypto');
 
-const dynamodb = new AWS.DynamoDB();
-const tName = "CrudAPI";
+const dynamodb = new AWS.DynamoDB.DocumentClient();
+const tName = "SlackCRUD";
 
 exports.handler = async (event, context) => {
 
@@ -37,46 +37,90 @@ exports.handler = async (event, context) => {
 };
 
 async function createRecord(tableName, user_id, attributes) {
+    if(await isExists(user_id)) {
+        console.log("already have a table");
+        return false;
+    }
     const params = {
-        'TableName': tableName,
+        'TableName': 'SlackCRUD',
         'Item': {
-            'user_id': { S: user_id },
+            'user_id': user_id ,
             ...attributes
         },
     };
 
+    console.log("the params:\n" + JSON.stringify(params));
+
     try {
-        await dynamodb.putItem(params).promise();
-        console.log('Record created successfully');
+        await dynamodb.put(params).promise();
+        console.log("table has been created by user_id:" + user_id);
         return true;
-    } catch (error) {
-        console.error('Error creating record:', error);
+    } catch (err) {
+        console.log("Catch" + err);
         return false;
     }
+}
+
+async function readRecord(user_id, record_id) {
+    if(! await isExists(user_id)) {
+        console.log("doesn't have a table");
+        return false;
+    }
+    console.log("user_id " + user_id);
+    const queryParams = {
+        TableName: 'SlackCRUD',
+        FilterExpression: 'user_id = :uid',
+        ExpressionAttributeValues: {
+            ':uid': user_id
+        }
+    };
+
+    if(!record_id) {
+        try {
+            const data = await dynamodb.scan(queryParams).promise();
+            return data.Items;
+        } catch (err) {
+            console.error('Error retrieving records:', err);
+            throw err;
+        }
+    } else {
+        const queryParams = {
+            TableName: 'SlackCRUD',
+            KeyConditionExpression: 'user_id = :uid and record_id = :rid',
+            ExpressionAttributeValues: {
+                ':uid': user_id,
+                ':rid': record_id
+            }
+        };
+        try {
+            const data = await dynamodb.query(queryParams).promise();
+            return data.Items; // Assuming there is only one record with the given user_id and record_id
+        } catch (err) {
+            console.error('Error retrieving record:', err);
+            throw err;
+        }
+    }
+
 }
 
 
 
 
-function handleKey(event) {
+async function handleKey(event) {
+    const date = new Date();
+    const timestamp = date.getTime().toString();
+
     let text = event.text;
     let splitValue = text.split("+");
     let firstWord = splitValue[0]; // The first word
     let otherWords = splitValue.slice(1).join(" ");
+    console.log("otherwords: " + otherWords);
     firstWord = firstWord.toLowerCase();
     let details;
+    let result;
     switch (firstWord) {
         case "create":
             console.log("Handling 'create' key...");
-            const params = {
-                TableName: tName,
-                Item: {
-                    'user_id': { S: event.user_id },
-                    'record_id': {S: '1'},
-                    'table_name': { S: otherWords},
-                    'record_data': { S: 'Table created'}
-                },
-            };
             details = createMessage(firstWord, event.user_name, otherWords);
             return details;
         case "update":
@@ -86,7 +130,18 @@ function handleKey(event) {
             return details;
         case "read":
             console.log("Handling 'read' key...");
-            details = createMessage(firstWord, event.user_name, otherWords);
+            result = await readRecord(event.user_id, otherWords);
+            console.log("result: " + JSON.stringify(result));
+            if (!result) {
+                details = createMessage(firstWord, event.user_name, "You don't have a table. Create table first");
+            } else if (result.length === 0) {
+                details = createMessage(firstWord, event.user_name, "This record doesn't exist");
+            }
+            else {
+                details = createMessage(firstWord, event.user_name, result);
+            }
+
+
             return details;
         case "delete":
             console.log("Handling 'delete' key...");
@@ -94,7 +149,19 @@ function handleKey(event) {
             return details;
         case "launch":
             console.log("Handling 'launch' key...");
-            details = createMessage(firstWord, event.user_name, otherWords);
+            const params = {
+                'record_id': timestamp,
+                'table_name': otherWords,
+                'record_data': 'Table created'
+            };
+            result = await createRecord(tName, event.user_id, params);
+            console.log("result: " + result);
+            if(result) {
+                details = createMessage(firstWord, event.user_name, otherWords);
+            } else {
+                details = createMessage(firstWord, event.user_name, 'already have a table');
+            }
+
             return details;
         default:
             console.log(`Invalid key: ${firstWord}`);
@@ -120,7 +187,58 @@ const signedBySlack = function(req, body) {
     return cryptoEquality;
 };
 
-const createMessage = function (command, userName, result ) {
+// const createMessage = function (command, userName, result ) {
+//     const message = {
+//         "blocks": [
+//             {
+//                 "type": "divider"
+//             },
+//             {
+//                 "type": "header",
+//                 "text": {
+//                     "type": "plain_text",
+//                     "text": "Action",
+//                     "emoji": true
+//                 }
+//             },
+//             {
+//                 "type": "context",
+//                 "elements": [
+//                     {
+//                         "type": "plain_text",
+//                         "text": "Author: ",
+//                         "emoji": true
+//                     }
+//                 ]
+//             },
+//             {
+//                 "type": "section",
+//                 "text": {
+//                     "type": "plain_text",
+//                     "text": "Result:",
+//                     "emoji": true
+//                 }
+//             },
+//             {
+//                 "type": "section",
+//                 "text": {
+//                     "type": "plain_text",
+//                     "text": "dynamic",
+//                     "emoji": true
+//                 }
+//             },
+//             {
+//                 "type": "divider"
+//             }
+//         ]
+//     };
+//     message.blocks[1].text.text = command;
+//     message.blocks[2].elements[0].text = "Author: " + userName;
+//     message.blocks[4].text.text = result;
+//     return message;
+// };
+
+const createMessage = function (command, userName, result) {
     const message = {
         "blocks": [
             {
@@ -153,20 +271,65 @@ const createMessage = function (command, userName, result ) {
                 }
             },
             {
-                "type": "section",
-                "text": {
-                    "type": "plain_text",
-                    "text": "dynamic",
-                    "emoji": true
-                }
-            },
-            {
                 "type": "divider"
             }
         ]
     };
+
     message.blocks[1].text.text = command;
     message.blocks[2].elements[0].text = "Author: " + userName;
-    message.blocks[4].text.text = result;
+
+    // Check if the result is an array
+    if (Array.isArray(result)) {
+        // Add each JSON object as a separate code block
+        result.forEach((item) => {
+            const codeBlock = {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "```\n" + JSON.stringify(item, null, 2) + "\n```"
+                }
+            };
+            message.blocks.push(codeBlock);
+        });
+    } else {
+        // If the result is not an array, add it as a single code block
+        const codeBlock = {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "```\n" + JSON.stringify(result, null, 2) + "\n```"
+            }
+        };
+        message.blocks.push(codeBlock);
+    }
+
     return message;
 };
+
+
+async function isExists(userId) {
+    const queryParams = {
+        TableName: 'SlackCRUD',
+        KeyConditionExpression: 'user_id = :uid',
+        ExpressionAttributeValues: {
+            ':uid': userId
+        }
+    };
+
+    return new Promise((resolve, reject) => {
+        dynamodb.query(queryParams, function(err, data) {
+            if (err) {
+                console.error('Error querying records:', err);
+                reject(err);
+            } else {
+                if (data.Items.length === 0) {
+                    resolve(false);
+                } else {
+                    console.log("user items: ", data.Items);
+                    resolve(true);
+                }
+            }
+        });
+    });
+}
