@@ -29,10 +29,18 @@ exports.handler = async (event, context) => {
     if(!isAuth) {
         return "Not Auth";
     }
-    const message = handleKey(jsonObj);
-    const message2 = JSON.stringify(message);
-    console.log("the message is:\n" + message2);
-    return message;
+    
+    return handleKey(jsonObj)
+    .then((message) => {
+      const message2 = JSON.stringify(message);
+      console.log("The message is:\n" + message2);
+      return message;
+    })
+    .catch((error) => {
+      console.error("Error occurred:", error);
+      throw error; // Optional: Rethrow the error to propagate it further
+    });
+  
     // throw new Error('Something went wrong');
 };
 
